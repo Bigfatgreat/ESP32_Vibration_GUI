@@ -75,6 +75,9 @@ tabs.pack(pady=10, padx=10)
 tabs.add("🔌 Connect")
 tabs.add("📄 Data Log")
 tabs.add("⚙️ Settings")
+tabs.add("📡 WiFi")
+tabs.add("🔗 MQTT")
+
 
 # ---------- Tab 1: Connect ----------
 tab1 = tabs.tab("🔌 Connect")
@@ -116,7 +119,7 @@ fetch_button.pack(pady=5)
 clear_button = ctk.CTkButton(tab2, text="🗑️ Clear Log", command=clear_log)
 clear_button.pack(pady=5)
 
-# ---------- Tab 3: Setting  ----------
+
 # ---------- Tab 3: Settings (Updated Grid Layout) ----------
 tab3 = tabs.tab("⚙️ Settings")
 
@@ -155,6 +158,33 @@ for i, label in enumerate(labels):
     # Send button
     send_button = ctk.CTkButton(tab3, text="📤 Send", width=70, command=lambda k=label: send_value(k))
     send_button.grid(row=i, column=3, padx=10)
+
+# ---------- Tab 4: WIFI  ----------
+tab_wifi = tabs.tab("📡 WiFi")
+
+ssid_entry = ctk.CTkEntry(tab_wifi, width=300, placeholder_text="Enter WiFi SSID")
+ssid_entry.pack(pady=10)
+
+pass_entry = ctk.CTkEntry(tab_wifi, width=300, show="*", placeholder_text="Enter WiFi Password")
+pass_entry.pack(pady=10)
+
+def send_wifi_config():
+    if esp and esp.is_open:
+        ssid = ssid_entry.get()
+        pwd = pass_entry.get()
+        if ssid and pwd:
+            cmd = f"WIFI:{ssid},{pwd}\n"
+            esp.write(cmd.encode())
+            wifi_status.configure(text="Sent WiFi config ✅", text_color="green")
+        else:
+            wifi_status.configure(text="SSID or password missing!", text_color="red")
+
+wifi_button = ctk.CTkButton(tab_wifi, text="📤 Send WiFi Config", command=send_wifi_config)
+wifi_button.pack(pady=5)
+
+wifi_status = ctk.CTkLabel(tab_wifi, text="", text_color="gray")
+wifi_status.pack(pady=10)
+
 
 
 # Load ports on start
