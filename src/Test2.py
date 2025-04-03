@@ -185,7 +185,35 @@ wifi_button.pack(pady=5)
 wifi_status = ctk.CTkLabel(tab_wifi, text="", text_color="gray")
 wifi_status.pack(pady=10)
 
+# ---------- Tab 5: MQTT  ----------
+tab_mqtt = tabs.tab("🔗 MQTT")
 
+broker_entry = ctk.CTkEntry(tab_mqtt, width=300, placeholder_text="Broker IP or URL")
+broker_entry.pack(pady=10)
+
+port_entry = ctk.CTkEntry(tab_mqtt, width=300, placeholder_text="Port (e.g. 1883)")
+port_entry.pack(pady=10)
+
+topic_entry = ctk.CTkEntry(tab_mqtt, width=300, placeholder_text="Topic (optional)")
+topic_entry.pack(pady=10)
+
+def send_mqtt_config():
+    if esp and esp.is_open:
+        broker = broker_entry.get()
+        port = port_entry.get()
+        topic = topic_entry.get() or "default"
+        if broker and port:
+            cmd = f"MQTT:{broker},{port},{topic}\n"
+            esp.write(cmd.encode())
+            mqtt_status.configure(text="MQTT config sent ✅", text_color="green")
+        else:
+            mqtt_status.configure(text="Broker or port missing!", text_color="red")
+
+mqtt_button = ctk.CTkButton(tab_mqtt, text="📤 Send MQTT Config", command=send_mqtt_config)
+mqtt_button.pack(pady=5)
+
+mqtt_status = ctk.CTkLabel(tab_mqtt, text="", text_color="gray")
+mqtt_status.pack(pady=10)
 
 # Load ports on start
 refresh_ports()
