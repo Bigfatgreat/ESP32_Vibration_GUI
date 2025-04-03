@@ -1,97 +1,75 @@
-#include <Arduino.h>
-#include "LittleFS.h"
-#define FILESYSTEM LittleFS
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
 
-bool logging_enabled = true;
-unsigned long lastLogTime = 0;
-const unsigned long logInterval = 10000;
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 
-String current_value = "N/A";
-String valA = "N/A", valB = "N/A", valC = "N/A", valD = "N/A";
+const char* ssid = "SAAA-KKN";  
+const char* password = "Ace@6489"; 
+const char* mqtt_server = "10.4.32.78";
+const char* mqtt_server_spare_1 = "10.4.88.69";
+const char* mqtt_server_spare_2 = "10.4.88.69";   
+const char* mqtt_topic = "";  
+const char* mqtt_name = "master";
+const char* host = "ACE";
+
+unsigned long lastSend = 0;
+const unsigned long sendInterval = 10000;
 
 void setup() {
   Serial.begin(115200);
-  if (!FILESYSTEM.begin(true)) {
-    Serial.println(F("LittleFS Mount Failed"));
-    return;
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
   }
-  Serial.println(F("ESP32 Logger Ready"));
+  Serial.println("WiFi connected");
+
+  mqttClient.setServer(mqtt_server, 1883);
+  while (!mqttClient.connected()) {
+    Serial.print("Connecting to MQTT...");
+    if (mqttClient.connect("ESP32Client")) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.println(mqttClient.state());
+      delay(2000);
+    }
+  }
+}
+
+void sendMockVibration() {
+  StaticJsonDocument<256> doc;
+  doc["AX"] = random(0, 1000) / 100.0;
+  doc["AY"] = random(0, 1000) / 100.0;
+  doc["AZ"] = random(0, 1000) / 100.0;
+  doc["TEMP"] = 25.0 + random(-500, 500) / 100.0;
+
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+  mqttClient.publish(mqtt_topic, jsonStr.c_str());
+
+  Serial.println("Published mock data: " + jsonStr);
 }
 
 void loop() {
-  // Simulate sensor logging every 10 seconds
-  if (logging_enabled && millis() - lastLogTime > logInterval) {
-    lastLogTime = millis();
-    float temp = random(200, 300) / 10.0;
-    float hum = random(400, 600) / 10.0;
+  mqttClient.loop();
 
-    // Create file if missing and add CSV header
-    if (!FILESYSTEM.exists("/log.txt")) {
-      File headerFile = FILESYSTEM.open("/log.txt", FILE_WRITE);
-      if (headerFile) {
-        headerFile.println("Temperature,Humidity,Timestamp");
-        headerFile.close();
-      }
-    }
-
-    File file = FILESYSTEM.open("/log.txt", FILE_APPEND);
-    if (file) {
-      file.printf("%.1f,%.1f,%lu\n", temp, hum, millis() / 1000);
-      file.close();
-    }
+  if (millis() - lastSend > sendInterval) {
+    lastSend = millis();
+    sendMockVibration();
   }
-
-  // Handle serial commands
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
+  
+  String cmd = Serial.readStringUntil('\n');
     cmd.trim();
-
-    // Value SET
-    if (cmd.startsWith("SET_A:")) valA = cmd.substring(6);
-    else if (cmd.startsWith("SET_B:")) valB = cmd.substring(6);
-    else if (cmd.startsWith("SET_C:")) valC = cmd.substring(6);
-    else if (cmd.startsWith("SET_D:")) valD = cmd.substring(6);
-
-    // Value GET
-    else if (cmd == "GET_A") Serial.println(valA);
-    else if (cmd == "GET_B") Serial.println(valB);
-    else if (cmd == "GET_C") Serial.println(valC);
-    else if (cmd == "GET_D") Serial.println(valD);
-
-    // Classic GET/SET for testing
-    else if (cmd.startsWith("SET:")) {
-      current_value = cmd.substring(4);
-      Serial.println("Value updated");
-    }
-    else if (cmd == "GET_VALUE") {
-      Serial.println(current_value);
-    }
-
-    // Get entire log
-    else if (cmd == "GET_LOG") {
-      File file = FILESYSTEM.open("/log.txt");
-      if (file) {
-        while (file.available()) {
-          Serial.write(file.read());
-        }
-        file.close();
-      } else {
-        Serial.println(F("Can't open log.txt"));
-      }
-    }
-
-    // Clear log
-    else if (cmd == "CLEAR_LOG") {
-      logging_enabled = false;
-      FILESYSTEM.remove("/log.txt");
-      delay(100);
-      File check = FILESYSTEM.open("/log.txt");
-      if (!check) Serial.println(F("Log cleared."));
-      else {
-        Serial.println(F("Log still exists!"));
-        check.close();
-      }
-      logging_enabled = true;
+  if (cmd == "GET_WIFI_STATUS") {
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi Connected: " + WiFi.localIP().toString());
+    } else {
+      Serial.println("WiFi Not Connected");
     }
   }
+  
 }
