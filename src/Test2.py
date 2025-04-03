@@ -117,36 +117,45 @@ clear_button = ctk.CTkButton(tab2, text="🗑️ Clear Log", command=clear_log)
 clear_button.pack(pady=5)
 
 # ---------- Tab 3: Setting  ----------
+# ---------- Tab 3: Settings (Updated Grid Layout) ----------
 tab3 = tabs.tab("⚙️ Settings")
 
-write_entry = ctk.CTkEntry(tab3, width=300, placeholder_text="Enter value to send")
-write_entry.pack(pady=10)
+labels = ["A", "B", "C", "D"]
+send_entries = {}
+read_outputs = {}
 
-def send_value():
+def send_value(key):
     if esp and esp.is_open:
-        val = write_entry.get()
+        val = send_entries[key].get()
         if val:
-            esp.write(f"SET:{val}\n".encode())
-            status_output.configure(text=f"Sent: {val}")
+            esp.write(f"SET_{key}:{val}\n".encode())
+            read_outputs[key].configure(text="⏳")
+            time.sleep(0.2)
+            esp.write(f"GET_{key}\n".encode())
+            time.sleep(0.2)
+            result = esp.readline().decode(errors='ignore').strip()
+            read_outputs[key].configure(text=result)
         else:
-            status_output.configure(text="Input is empty")
+            read_outputs[key].configure(text="❌ Empty")
 
-send_button = ctk.CTkButton(tab3, text="📤 Send to ESP32", command=send_value)
-send_button.pack(pady=5)
+for i, label in enumerate(labels):
+    # Label
+    ctk.CTkLabel(tab3, text=f"Value {label}").grid(row=i, column=0, padx=10, pady=10)
 
-def read_value():
-    if esp and esp.is_open:
-        esp.reset_input_buffer()
-        esp.write(b"GET_VALUE\n")
-        time.sleep(0.5)
-        result = esp.readline().decode(errors='ignore')
-        status_output.configure(text=f"Received: {result.strip()}")
+    # Entry for sending
+    send_entry = ctk.CTkEntry(tab3, width=150, placeholder_text=f"Send {label}")
+    send_entry.grid(row=i, column=1, padx=10)
+    send_entries[label] = send_entry
 
-read_button = ctk.CTkButton(tab3, text="📥 Read from ESP32", command=read_value)
-read_button.pack(pady=5)
+    # Readout label
+    read_label = ctk.CTkLabel(tab3, text="---", width=150)
+    read_label.grid(row=i, column=2, padx=10)
+    read_outputs[label] = read_label
 
-status_output = ctk.CTkLabel(tab3, text="Status will appear here")
-status_output.pack(pady=10)
+    # Send button
+    send_button = ctk.CTkButton(tab3, text="📤 Send", width=70, command=lambda k=label: send_value(k))
+    send_button.grid(row=i, column=3, padx=10)
+
 
 # Load ports on start
 refresh_ports()
