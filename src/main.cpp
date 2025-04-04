@@ -1,97 +1,85 @@
-#include <Arduino.h>
-#include "LittleFS.h"
-#define FILESYSTEM LittleFS
+#include <ArduinoJson.h>
 
-bool logging_enabled = true;
-unsigned long lastLogTime = 0;
-const unsigned long logInterval = 10000;
-
-String current_value = "N/A";
-String valA = "N/A", valB = "N/A", valC = "N/A", valD = "N/A";
+bool stopReading = false;  // Flag to control sensor reading
 
 void setup() {
-  Serial.begin(115200);
-  if (!FILESYSTEM.begin(true)) {
-    Serial.println(F("LittleFS Mount Failed"));
-    return;
-  }
-  Serial.println(F("ESP32 Logger Ready"));
+  Serial.begin(115200);  // Start the serial communication
+  randomSeed(analogRead(0));  // Seed for random number generator
 }
 
 void loop() {
-  // Simulate sensor logging every 10 seconds
-  if (logging_enabled && millis() - lastLogTime > logInterval) {
-    lastLogTime = millis();
-    float temp = random(200, 300) / 10.0;
-    float hum = random(400, 600) / 10.0;
+  if (Serial.available()) {
+    String command = Serial.readStringUntil('\n');  // Read the command from serial
+    command.trim();
 
-    // Create file if missing and add CSV header
-    if (!FILESYSTEM.exists("/log.txt")) {
-      File headerFile = FILESYSTEM.open("/log.txt", FILE_WRITE);
-      if (headerFile) {
-        headerFile.println("Temperature,Humidity,Timestamp");
-        headerFile.close();
-      }
-    }
-
-    File file = FILESYSTEM.open("/log.txt", FILE_APPEND);
-    if (file) {
-      file.printf("%.1f,%.1f,%lu\n", temp, hum, millis() / 1000);
-      file.close();
+    if (command == "STOP_READING") {
+      stopReading = true;  // Stop reading sensor data
+      Serial.println("Sensor reading stopped.");
+    } else if (command == "START_READING") {
+      stopReading = false;  // Start reading sensor data
+      Serial.println("Sensor reading started.");
     }
   }
 
-  // Handle serial commands
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    cmd.trim();
+  if (!stopReading) {
+    // Generate random values for the sensor data
+    float AX_C = random(100, 500) / 100.0;  // Simulating AX_C
+    float AY_C = random(100, 500) / 100.0;  // Simulating AY_C
+    float AZ_C = random(100, 500) / 100.0;  // Simulating AZ_C
+    int VX = random(0, 100);                // Simulating VX
+    int VY = random(0, 100);                // Simulating VY
+    int VZ = random(0, 100);                // Simulating VZ
+    int TEMP = random(10, 30);              // Simulating Temperature
 
-    // Value SET
-    if (cmd.startsWith("SET_A:")) valA = cmd.substring(6);
-    else if (cmd.startsWith("SET_B:")) valB = cmd.substring(6);
-    else if (cmd.startsWith("SET_C:")) valC = cmd.substring(6);
-    else if (cmd.startsWith("SET_D:")) valD = cmd.substring(6);
+    // Simulate more data
+    int DX = random(0, 50);  // Simulating DX (Distance)
+    int DY = random(0, 50);  // Simulating DY
+    int DZ = random(0, 50);  // Simulating DZ
+    int HX = random(0, 100); // Simulating HX (Height)
+    int HkDJ = random(0, 100); // Simulating HkDJ
+    int HZZ = random(0, 100);  // Simulating HZZ
 
-    // Value GET
-    else if (cmd == "GET_A") Serial.println(valA);
-    else if (cmd == "GET_B") Serial.println(valB);
-    else if (cmd == "GET_C") Serial.println(valC);
-    else if (cmd == "GET_D") Serial.println(valD);
+    // Create a JSON object to store the data
+    StaticJsonDocument<512> doc;
 
-    // Classic GET/SET for testing
-    else if (cmd.startsWith("SET:")) {
-      current_value = cmd.substring(4);
-      Serial.println("Value updated");
-    }
-    else if (cmd == "GET_VALUE") {
-      Serial.println(current_value);
-    }
+    // Adding random values to the JSON document
+    String AX_T = "AX_1";
+    String AY_T = "AY_1";
+    String AZ_T = "AZ_1";
+    String VX_T = "VX_1";
+    String VY_T = "VY_1";
+    String VZ_T = "VZ_1";
+    String TEMP_T = "TEMP_1";
+    String DX_T = "DX_1";
+    String DY_T = "DY_1";
+    String DZ_T = "DZ_1";
+    String HX_T = "HX_1";
+    String HkDJ_T = "HkDJ_1";
+    String HZZ_T = "HZZ_1";
 
-    // Get entire log
-    else if (cmd == "GET_LOG") {
-      File file = FILESYSTEM.open("/log.txt");
-      if (file) {
-        while (file.available()) {
-          Serial.write(file.read());
-        }
-        file.close();
-      } else {
-        Serial.println(F("Can't open log.txt"));
-      }
-    }
+    // Fill the JSON document with simulated data
+    doc[AX_T] = AX_C;
+    doc[AY_T] = AY_C;
+    doc[AZ_T] = AZ_C;
+    doc[VX_T] = VX;
+    doc[VY_T] = VY;
+    doc[VZ_T] = VZ;
+    doc[TEMP_T] = TEMP;
+    doc[DX_T] = DX;
+    doc[DY_T] = DY;
+    doc[DZ_T] = DZ;
+    doc[HX_T] = HX;
+    doc[HkDJ_T] = HkDJ;
+    doc[HZZ_T] = HZZ;
 
-    // Clear log
-    else if (cmd == "CLEAR_LOG") {
-      logging_enabled = false;
-      FILESYSTEM.remove("/log.txt");
-      delay(100);
-      File check = FILESYSTEM.open("/log.txt");
-      if (!check) Serial.println(F("Log cleared."));
-      else {
-        Serial.println(F("Log still exists!"));
-        check.close();
-      }
-      logging_enabled = true;
-    }
+    // Serialize the JSON object into a string
+    String jsonString;
+    serializeJson(doc, jsonString);
+
+    // Send the JSON data over Serial to the GUI (or MQTT if used)
+    Serial.println(jsonString);
+
+    // Wait for 1 second before the next iteration
+    delay(1000);  // Adjust this delay as needed
   }
 }
