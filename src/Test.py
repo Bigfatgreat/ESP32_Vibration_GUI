@@ -54,6 +54,7 @@ class SensorDataGUI:
         # Start serial data processing thread
         self.process_thread = Thread(target=self.process_serial_data, daemon=True)
         self.process_thread.start()
+        
     def create_temperature_panel(self):
         """Create the temperature monitoring panel on the right side"""
         temp_frame = ttk.LabelFrame(self.right_panel, text="Temperature Monitor")
@@ -83,7 +84,7 @@ class SensorDataGUI:
         self.temp_ax = self.temp_fig.add_subplot(111)
         self.temp_ax.set_ylim(0, 50)  # Assuming temperature range 0-50°C
         self.temp_ax.axhline(y=self.temp_threshold, color='r', linestyle='--')
-        self.temp_bar = self.temp_ax.bar(0, 0, width=0.6, color='blue')
+        self.temp_bar = self.temp_ax.bar(0, 0, width=0.8, color='blue')
         self.temp_ax.set_title("Temperature")
         self.temp_ax.set_ylabel("°C")
         self.temp_ax.set_xticks([])  # Remove x-axis ticks
@@ -158,34 +159,36 @@ class SensorDataGUI:
         self.status_label = ttk.Label(connection_frame, text="Disconnected", foreground="red")
         self.status_label.grid(row=0, column=5, padx=5, pady=5)
         
-        # Control frame
-        control_frame = ttk.LabelFrame(self.main_tab, text="Controls")
+        # Control frame - Simplified command buttons
+        control_frame = ttk.LabelFrame(self.main_tab, text="Commands")
         control_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Start/Stop buttons
-        self.start_button = ttk.Button(control_frame, text="Start Reading", command=self.start_reading)
+        # Start button - sends command immediately
+        self.start_button = ttk.Button(control_frame, text="Send START", command=self.send_start_command)
         self.start_button.pack(side=tk.LEFT, padx=5, pady=5)
-        self.stop_button = ttk.Button(control_frame, text="Stop Reading", command=self.stop_reading, state=tk.DISABLED)
+        
+        # Stop button - sends command immediately
+        self.stop_button = ttk.Button(control_frame, text="Send STOP", command=self.send_stop_command)
         self.stop_button.pack(side=tk.LEFT, padx=5, pady=5)
         
         # Data display frame
         data_frame = ttk.LabelFrame(self.main_tab, text="Sensor Data")
         data_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
-        # Create treeview for data display (without temperature column)
+        # Create treeview for data display
         self.tree = ttk.Treeview(data_frame, columns=("A", "V", "D", "H"), show="headings")
         self.tree.heading("A", text="Acceleration")
         self.tree.heading("V", text="Velocity")
         self.tree.heading("D", text="Distance")
         self.tree.heading("H", text="Height")
         
-        # Add columns for each sensor component
         self.tree.column("A", width=200, anchor=tk.CENTER)
         self.tree.column("V", width=200, anchor=tk.CENTER)
         self.tree.column("D", width=200, anchor=tk.CENTER)
         self.tree.column("H", width=200, anchor=tk.CENTER)
         
         self.tree.pack(fill=tk.BOTH, expand=True)
+    
 
     def create_graph_tab(self):
         """Create the Graph tab with matplotlib visualization (without temperature)"""
@@ -349,21 +352,24 @@ class SensorDataGUI:
         except Exception as e:
             print(f"Error updating UI: {e}")
 
-    def start_reading(self):
-        """Send start command to Arduino"""
+    def send_start_command(self):
+        """Send START_READING command to Arduino"""
         if self.connected and self.serial_connection and self.serial_connection.is_open:
-            self.serial_connection.write(b"START_READING\n")
-            self.stop_reading = False
-            self.start_button.config(state=tk.DISABLED)
-            self.stop_button.config(state=tk.NORMAL)
+            try:
+                self.serial_connection.write(b"START_READING\n")
+                print("Sent START_READING command")
+            except Exception as e:
+                print(f"Error sending START command: {e}")
     
-    def stop_reading(self):
-        """Send stop command to Arduino"""
+    def send_stop_command(self):
+        """Send STOP_READING command to Arduino"""
         if self.connected and self.serial_connection and self.serial_connection.is_open:
-            self.serial_connection.write(b"STOP_READING\n")
-            self.stop_reading = True
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
+            try:
+                self.serial_connection.write(b"STOP_READING\n")
+                print("Sent STOP_READING command")
+            except Exception as e:
+                print(f"Error sending STOP command: {e}")
+
     
     def update_graph(self):
         """Update the graph with selected data"""
