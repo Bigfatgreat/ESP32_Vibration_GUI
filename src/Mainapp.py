@@ -42,6 +42,9 @@ class SensorDataGUI:
             "Temperature": {"X": []}
         }
 
+        # A buffer to accumulate partial data from the serial queue
+        self.buffer = ""
+
         # Create a Notebook for Main, Graph and WiFi tabs
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill=tk.BOTH, expand=True)
@@ -74,13 +77,6 @@ class SensorDataGUI:
     # MAIN TAB
     # -------------------------------------------------------------------------
     def build_main_tab(self):
-        """
-        Build the layout for the Main tab:
-          - Serial connection controls (toggle button and additional serial options)
-          - Overview (Wi-Fi & MQTT status placeholders)
-          - Data Logs (sensor data treeview and event log)
-        """
-        # Top Connection Frame (Row 0: Port, Baud Rate)
         connection_frame = ttk.Frame(self.main_tab)
         connection_frame.pack(fill=tk.X, padx=5, pady=5)
 
@@ -93,7 +89,7 @@ class SensorDataGUI:
         self.baud_combobox.grid(row=0, column=3, padx=5, pady=5, sticky="w")
         self.baud_combobox.set("115200")
 
-        # Add additional serial settings in row 1
+        # Additional serial settings
         ttk.Label(connection_frame, text="Parity:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
         self.parity_combobox = ttk.Combobox(connection_frame, values=["None", "Even", "Odd"], width=10)
         self.parity_combobox.grid(row=1, column=1, padx=5, pady=5, sticky="w")
@@ -109,15 +105,13 @@ class SensorDataGUI:
         self.flow_control_combobox.grid(row=1, column=5, padx=5, pady=5, sticky="w")
         self.flow_control_combobox.set("None")
 
-        # Serial Connect/Disconnect Toggle Button (row 0, column 6 spanning both rows)
+        # Connect/Disconnect toggle
         self.connect_button = ttk.Button(connection_frame, text="Connect", command=self.toggle_connection)
         self.connect_button.grid(row=0, column=6, rowspan=2, padx=5, pady=5)
-
-        # Status Label for serial connection
         self.status_label = ttk.Label(connection_frame, text="Disconnected", foreground="red")
         self.status_label.grid(row=0, column=7, rowspan=2, padx=5, pady=5, sticky="w")
 
-        # Commands Frame (for sending START/STOP commands)
+        # Commands (START/STOP)
         commands_frame = ttk.Frame(connection_frame)
         commands_frame.grid(row=0, column=8, rowspan=2, padx=5, pady=5, sticky="w")
         self.start_button = ttk.Button(commands_frame, text="Send START", command=self.send_start_command, state=tk.DISABLED)
@@ -125,7 +119,7 @@ class SensorDataGUI:
         self.stop_button = ttk.Button(commands_frame, text="Send STOP", command=self.send_stop_command, state=tk.DISABLED)
         self.stop_button.pack(side=tk.LEFT, padx=5)
 
-        # Middle: Two frames side-by-side: Overview (left), Data Logs (right)
+        # Two frames side-by-side: Overview (left), Data Logs (right)
         content_frame = ttk.Frame(self.main_tab)
         content_frame.pack(fill=tk.BOTH, expand=True)
         self.overview_frame = ttk.LabelFrame(content_frame, text="Overview")
@@ -133,7 +127,7 @@ class SensorDataGUI:
         self.data_logs_frame = ttk.LabelFrame(content_frame, text="Data Logs")
         self.data_logs_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Overview: Wi-Fi & MQTT status placeholders
+        # Overview: Wi-Fi & MQTT placeholders
         ttk.Label(self.overview_frame, text="Wi-Fi: ").grid(row=0, column=0, padx=5, pady=5, sticky="w")
         self.wifi_dot = ttk.Label(self.overview_frame, text="\u25CF", foreground="red")
         self.wifi_dot.grid(row=0, column=1, padx=2, pady=5, sticky="w")
@@ -145,11 +139,10 @@ class SensorDataGUI:
         self.mqtt_label = ttk.Label(self.overview_frame, text="Not connected", foreground="red")
         self.mqtt_label.grid(row=1, column=2, padx=5, pady=5, sticky="w")
 
-        # Data Logs: sensor values (treeview) and event log
+        # Data logs (Treeview + event log)
         self.build_data_logs()
 
     def build_data_logs(self):
-        """Build the treeview for sensor data and a compact event log."""
         self.tree = ttk.Treeview(self.data_logs_frame, columns=("A", "V", "D", "H"), show="headings", height=8)
         self.tree.heading("A", text="Acceleration")
         self.tree.heading("V", text="Velocity")
@@ -166,6 +159,7 @@ class SensorDataGUI:
         self.event_log = tk.Text(self.event_log_frame, width=60, height=8)
         self.event_log.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
         self.event_log.config(state=tk.DISABLED)
+
         self.admin_input = ttk.Entry(self.event_log_frame, width=30)
         self.admin_input.pack(side=tk.BOTTOM, padx=5, pady=5)
         self.admin_input.bind("<Return>", self.check_admin_input)
@@ -174,32 +168,36 @@ class SensorDataGUI:
     # GRAPH TAB
     # -------------------------------------------------------------------------
     def build_graph_tab(self):
-        """Create the Graph tab with matplotlib visualization for sensor data."""
         graph_control_frame = ttk.LabelFrame(self.graph_tab, text="Graph Controls")
         graph_control_frame.pack(fill=tk.X, padx=5, pady=5)
+
         ttk.Label(graph_control_frame, text="Select Sensor:").pack(side=tk.LEFT, padx=5, pady=5)
         self.sensor_var = tk.StringVar()
         sensor_options = ["Acceleration", "Velocity", "Distance", "Height", "Temperature"]
         self.sensor_menu = ttk.OptionMenu(graph_control_frame, self.sensor_var, sensor_options[0], *sensor_options)
         self.sensor_menu.pack(side=tk.LEFT, padx=5, pady=5)
+
         ttk.Label(graph_control_frame, text="Component:").pack(side=tk.LEFT, padx=5, pady=5)
         self.component_var = tk.StringVar()
         self.component_menu = ttk.OptionMenu(graph_control_frame, self.component_var, "X", "X", "Y", "Z")
         self.component_menu.pack(side=tk.LEFT, padx=5, pady=5)
+
         update_button = ttk.Button(graph_control_frame, text="Update Graph", command=self.update_graph)
         update_button.pack(side=tk.LEFT, padx=5, pady=5)
+
         self.figure = Figure(figsize=(8, 4), dpi=100)
         self.ax = self.figure.add_subplot(111)
         self.ax.grid(True)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.graph_tab)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
     # -------------------------------------------------------------------------
     # WIFI TAB
     # -------------------------------------------------------------------------
     def build_wifi_tab(self):
-        """Build the WiFi configuration tab with a single toggle button."""
         container = ttk.Frame(self.wifi_tab)
         container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
         status_frame = ttk.LabelFrame(container, text="WiFi Status")
         status_frame.pack(fill=tk.X, pady=5)
         self.wifi_status_dot = ttk.Label(status_frame, text="●", foreground="red")
@@ -208,6 +206,7 @@ class SensorDataGUI:
         self.wifi_status_label_tab.pack(side=tk.LEFT, padx=5)
         self.ip_label = ttk.Label(status_frame, text="IP: Not connected")
         self.ip_label.pack(side=tk.LEFT, padx=20)
+
         config_frame = ttk.LabelFrame(container, text="WiFi Configuration")
         config_frame.pack(fill=tk.X, pady=5)
         ttk.Label(config_frame, text="SSID:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
@@ -216,22 +215,24 @@ class SensorDataGUI:
         ttk.Label(config_frame, text="Password:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
         self.password_entry = ttk.Entry(config_frame, show="*")
         self.password_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+
         button_frame = ttk.Frame(config_frame)
         button_frame.grid(row=2, column=0, columnspan=2, pady=10)
         self.wifi_toggle_btn = ttk.Button(button_frame, text="Connect", command=self.toggle_wifi_connection)
         self.wifi_toggle_btn.pack(side=tk.LEFT, padx=5)
         self.save_button = ttk.Button(button_frame, text="Save", command=self.save_wifi_config)
         self.save_button.pack(side=tk.LEFT, padx=5)
+
         test_frame = ttk.LabelFrame(container, text="Test Connection")
         test_frame.pack(fill=tk.X, pady=5)
         self.test_button = ttk.Button(test_frame, text="Test Internet Connection", command=self.test_internet_connection)
         self.test_button.pack(pady=5)
         self.test_result = ttk.Label(test_frame, text="")
         self.test_result.pack(pady=5)
+
         self.load_wifi_config()
 
     def load_wifi_config(self):
-        """Load WiFi configuration from a file."""
         try:
             with open("wifi_config.json", "r") as f:
                 config = json.load(f)
@@ -241,24 +242,18 @@ class SensorDataGUI:
             pass
 
     def save_wifi_config(self):
-        """Save WiFi configuration to a file."""
-        config = {
-            "ssid": self.ssid_entry.get(),
-            "password": self.password_entry.get()
-        }
+        config = {"ssid": self.ssid_entry.get(), "password": self.password_entry.get()}
         with open("wifi_config.json", "w") as f:
             json.dump(config, f)
         messagebox.showinfo("Success", "WiFi configuration saved")
 
     def toggle_wifi_connection(self):
-        """Toggle the WiFi connection state using a single button."""
         if self.wifi_toggle_btn.cget("text") == "Disconnect":
             self.disconnect_wifi()
         else:
             self.connect_wifi()
 
     def connect_wifi(self):
-        """Handle WiFi connection via serial command."""
         ssid = self.ssid_entry.get()
         password = self.password_entry.get()
         if not ssid:
@@ -275,11 +270,9 @@ class SensorDataGUI:
                 self.log_event(f"Error sending WiFi command: {e}")
                 self.update_wifi_status(False)
         else:
-            # For testing without serial, simulate a connection:
             self.finish_wifi_connection(ssid, "192.168.1.100")
 
     def disconnect_wifi(self):
-        """Handle WiFi disconnection."""
         self.wifi_toggle_btn.config(text="Connect")
         self.wifi_status_label_tab.config(text="Disconnecting...", foreground="orange")
         if self.serial_connection and self.serial_connection.is_open:
@@ -292,12 +285,10 @@ class SensorDataGUI:
             self.update_wifi_status(False)
 
     def finish_wifi_connection(self, ssid, ip):
-        """Finish the WiFi connection process and update UI."""
         self.update_wifi_status(True, ssid, ip)
         messagebox.showinfo("Success", f"Connected to {ssid}")
 
     def update_wifi_status(self, connected, ssid="", ip=""):
-        """Update WiFi status labels in both WiFi tab and main tab overview."""
         if connected:
             self.wifi_toggle_btn.config(text="Disconnect")
             self.wifi_status_label_tab.config(text=f"Connected to {ssid}", foreground="green")
@@ -311,7 +302,6 @@ class SensorDataGUI:
                                foreground="green" if connected else "red")
 
     def test_internet_connection(self):
-        """Test if there's an active Internet connection."""
         self.test_result.config(text="Testing...")
         try:
             requests.get("http://www.google.com", timeout=5)
@@ -320,7 +310,7 @@ class SensorDataGUI:
             self.test_result.config(text="Internet connection: Failed", foreground="red")
 
     # -------------------------------------------------------------------------
-    # ADMIN TAB (same as before)
+    # ADMIN TAB
     # -------------------------------------------------------------------------
     def build_admin_tab(self):
         label = ttk.Label(self.admin_tab, text="Welcome to the Admin Tab!")
@@ -362,9 +352,10 @@ class SensorDataGUI:
     def connect(self):
         port = self.port_combobox.get()
         baud = int(self.baud_combobox.get())
-
-        # Get additional settings from dropdowns
         parity_option = self.parity_combobox.get()
+        stopbits_option = self.stopbits_combobox.get()
+        flow_option = self.flow_control_combobox.get()
+
         if parity_option == "None":
             parity = serial.PARITY_NONE
         elif parity_option == "Even":
@@ -374,7 +365,6 @@ class SensorDataGUI:
         else:
             parity = serial.PARITY_NONE
 
-        stopbits_option = self.stopbits_combobox.get()
         if stopbits_option == "1":
             stopbits = serial.STOPBITS_ONE
         elif stopbits_option == "1.5":
@@ -384,12 +374,14 @@ class SensorDataGUI:
         else:
             stopbits = serial.STOPBITS_ONE
 
-        flow_option = self.flow_control_combobox.get()
-        rtscts = True if flow_option == "RTS/CTS" else False
+        rtscts = (flow_option == "RTS/CTS")
 
         try:
-            self.serial_connection = serial.Serial(port, baud, parity=parity, stopbits=stopbits,
-                                                   rtscts=rtscts, timeout=1)
+            self.serial_connection = serial.Serial(port, baud,
+                                                   parity=parity,
+                                                   stopbits=stopbits,
+                                                   rtscts=rtscts,
+                                                   timeout=1)
             self.connected = True
             self.connect_button.config(text="Disconnect")
             self.status_label.config(text="Connected", foreground="green")
@@ -413,7 +405,6 @@ class SensorDataGUI:
         self.refresh_graph()
 
     def refresh_graph(self):
-        """Redraw the graph with stored data to preserve the display."""
         self.ax.clear()
         if self.graph_data["Acceleration"]["X"]:
             self.ax.plot(self.graph_data["Acceleration"]["X"], label="Acceleration X")
@@ -423,9 +414,10 @@ class SensorDataGUI:
         self.canvas.draw()
 
     def read_serial_data(self):
+        """Reads raw lines from the serial port and puts them into serial_queue."""
         while self.connected and self.serial_connection and self.serial_connection.is_open:
             try:
-                line = self.serial_connection.readline().decode('utf-8').strip()
+                line = self.serial_connection.readline().decode('utf-8', errors='replace').strip()
                 if line:
                     self.serial_queue.put(line)
             except Exception as e:
@@ -433,78 +425,119 @@ class SensorDataGUI:
                 break
 
     def process_serial_data(self):
+        """Processes lines from serial_queue, extracting full JSON objects from buffer."""
         while True:
             try:
                 if not self.serial_queue.empty():
-                    data = self.serial_queue.get()
-                    if data.startswith("WIFI_STATUS:"):
-                        parts = data.split(":")
+                    new_line = self.serial_queue.get()
+                    
+                    # Check if this line might be a WiFi status line:
+                    if new_line.startswith("WIFI_STATUS:"):
+                        parts = new_line.split(":")
                         if len(parts) >= 4:
                             status = parts[1]
                             ssid = parts[2]
                             ip = parts[3]
                             self.update_wifi_status(status == "CONNECTED", ssid, ip)
                         continue
-                    self.update_ui(data)
+
+                    # Otherwise, treat as potential partial JSON data
+                    self.buffer += new_line + "\n"
+
+                    # Attempt to extract multiple JSON objects from the buffer
+                    while True:
+                        start_index = self.buffer.find('{')
+                        if start_index == -1:
+                            # No opening brace found, break
+                            break
+                        end_index = self.buffer.find('}', start_index)
+                        if end_index == -1:
+                            # No closing brace found, need more data
+                            break
+
+                        # Extract the JSON substring
+                        json_str = self.buffer[start_index:end_index+1]
+                        # Remove it from the buffer
+                        self.buffer = self.buffer[end_index+1:]
+                        
+                        # Attempt to parse JSON
+                        try:
+                            sensor_data = json.loads(json_str)
+                            # We have valid sensor data, update UI
+                            self.update_sensor_ui(sensor_data)
+                        except json.JSONDecodeError:
+                            self.log_event(f"Invalid JSON data: {json_str}")
+                            # we continue searching for next object in the buffer
+
                 self.root.update()
             except Exception as e:
                 self.log_event(f"UI update error: {e}")
 
-    # -------------------------------------------------------------------------
-    # UI UPDATES
-    # -------------------------------------------------------------------------
-    def update_ui(self, data):
-        try:
-            sensor_data = json.loads(data)
-            self.tree.delete(*self.tree.get_children())
-            ax = sensor_data.get("AX_1", "-")
-            ay = sensor_data.get("AY_1", "-")
-            az = sensor_data.get("AZ_1", "-")
-            vx = sensor_data.get("VX_1", "-")
-            vy = sensor_data.get("VY_1", "-")
-            vz = sensor_data.get("VZ_1", "-")
-            dx = sensor_data.get("DX_1", "-")
-            dy = sensor_data.get("DY_1", "-")
-            dz = sensor_data.get("DZ_1", "-")
-            hx = sensor_data.get("HX_1", "-")
-            hy = sensor_data.get("HY_1", "-")
-            hz = sensor_data.get("HZ_1", "-")
-            temp = sensor_data.get("TEMP_1", None)
-            self.tree.insert("", tk.END, values=(f"X: {ax}", f"X: {vx}", f"X: {dx}", f"X: {hx}"))
-            self.tree.insert("", tk.END, values=(f"Y: {ay}", f"Y: {vy}", f"Y: {dy}", f"Y: {hy}"))
-            self.tree.insert("", tk.END, values=(f"Z: {az}", f"Z: {vz}", f"Z: {dz}", f"Z: {hz}"))
-            self.store_graph_data(ax, ay, az, vx, vy, vz, dx, dy, dz, hx, hy, hz, temp)
-            self.log_event("Sensor data received.")
-        except json.JSONDecodeError:
-            self.log_event("Invalid JSON data received.")
-        except Exception as e:
-            self.log_event(f"Error updating UI: {e}")
+    def update_sensor_ui(self, sensor_data):
+        """Updates the treeview and graph data using a parsed sensor_data dict."""
+        # Clear existing rows
+        self.tree.delete(*self.tree.get_children())
 
+        ax = sensor_data.get("AX_1", "-")
+        ay = sensor_data.get("AY_1", "-")
+        az = sensor_data.get("AZ_1", "-")
+        vx = sensor_data.get("VX_1", "-")
+        vy = sensor_data.get("VY_1", "-")
+        vz = sensor_data.get("VZ_1", "-")
+        dx = sensor_data.get("DX_1", "-")
+        dy = sensor_data.get("DY_1", "-")
+        dz = sensor_data.get("DZ_1", "-")
+        hx = sensor_data.get("HX_1", "-")
+        hy = sensor_data.get("HY_1", "-")
+        hz = sensor_data.get("HZ_1", "-")
+        temp = sensor_data.get("TEMP_1", None)
+
+        # Insert new rows
+        self.tree.insert("", tk.END, values=(f"X: {ax}", f"X: {vx}", f"X: {dx}", f"X: {hx}"))
+        self.tree.insert("", tk.END, values=(f"Y: {ay}", f"Y: {vy}", f"Y: {dy}", f"Y: {hy}"))
+        self.tree.insert("", tk.END, values=(f"Z: {az}", f"Z: {vz}", f"Z: {dz}", f"Z: {hz}"))
+
+        # Store for graph
+        self.store_graph_data(ax, ay, az, vx, vy, vz, dx, dy, dz, hx, hy, hz, temp)
+
+        self.log_event("Sensor data received.")
+
+    # -------------------------------------------------------------------------
+    # UI UPDATES (Graph Data, etc.)
+    # -------------------------------------------------------------------------
     def store_graph_data(self, ax, ay, az, vx, vy, vz, dx, dy, dz, hx, hy, hz, temp):
         def safe_float(val):
             try:
                 return float(val)
             except:
                 return None
+
         axf, ayf, azf = safe_float(ax), safe_float(ay), safe_float(az)
         vxf, vyf, vzf = safe_float(vx), safe_float(vy), safe_float(vz)
         dxf, dyf, dzf = safe_float(dx), safe_float(dy), safe_float(dz)
         hxf, hyf, hzf = safe_float(hx), safe_float(hy), safe_float(hz)
         tf = safe_float(temp) if temp else None
+
         if axf is not None: self.graph_data["Acceleration"]["X"].append(axf)
         if ayf is not None: self.graph_data["Acceleration"]["Y"].append(ayf)
         if azf is not None: self.graph_data["Acceleration"]["Z"].append(azf)
+
         if vxf is not None: self.graph_data["Velocity"]["X"].append(vxf)
         if vyf is not None: self.graph_data["Velocity"]["Y"].append(vyf)
         if vzf is not None: self.graph_data["Velocity"]["Z"].append(vzf)
+
         if dxf is not None: self.graph_data["Distance"]["X"].append(dxf)
         if dyf is not None: self.graph_data["Distance"]["Y"].append(dyf)
         if dzf is not None: self.graph_data["Distance"]["Z"].append(dzf)
+
         if hxf is not None: self.graph_data["Height"]["X"].append(hxf)
         if hyf is not None: self.graph_data["Height"]["Y"].append(hyf)
         if hzf is not None: self.graph_data["Height"]["Z"].append(hzf)
+
         if tf is not None:
             self.graph_data["Temperature"]["X"].append(tf)
+
+        # Limit to last 100 points
         for sensor_dict in self.graph_data.values():
             for comp_list in sensor_dict.values():
                 if len(comp_list) > 100:
@@ -540,6 +573,7 @@ class SensorDataGUI:
         component = self.component_var.get()
         if sensor == "Temperature":
             component = "X"
+
         data = self.graph_data[sensor][component]
         self.ax.clear()
         self.ax.plot(data, label=f"{sensor} {component}")
