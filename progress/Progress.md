@@ -18,3 +18,5 @@
 
 ### ERROR
 - When Disconnect Send Start and Stop latch themselves, appear grey cannot select another option for example when we select start Disconnect When cannot choose Send Stop but the other functions work the same
+'''Serial read error: 'NoneType' object has no attribute 'hEvent'
+Sent START_READING command'''
