@@ -11,6 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import socket
 import requests
+import paho.mqtt.client as mqtt
 
 class SensorDataGUI:
     def __init__(self, root):
@@ -61,6 +62,10 @@ class SensorDataGUI:
         self.wifi_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.wifi_tab, text="WiFi")
 
+        # New MQTT tab for publishing and subscribing
+        self.mqtt_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.mqtt_tab, text="MQTT")
+
         # (Hidden) Admin tab - not added initially
         self.admin_tab = ttk.Frame(self.notebook)
 
@@ -68,10 +73,21 @@ class SensorDataGUI:
         self.build_main_tab()
         self.build_graph_tab()
         self.build_wifi_tab()
+        self.build_mqtt_tab()
 
         # Start serial data processing thread
         self.process_thread = Thread(target=self.process_serial_data, daemon=True)
         self.process_thread.start()
+
+        # Set up Python MQTT client for the MQTT tab
+        self.mqtt_client_py = mqtt.Client()
+        self.mqtt_client_py.on_connect = self.on_mqtt_connect
+        self.mqtt_client_py.on_message = self.on_mqtt_message
+        self.mqtt_client_py_connected = False
+
+        # Start MQTT loop in a separate thread
+        self.mqtt_thread = Thread(target=self.mqtt_loop, daemon=True)
+        self.mqtt_thread.start()
 
     # -------------------------------------------------------------------------
     # MAIN TAB
@@ -308,6 +324,99 @@ class SensorDataGUI:
             self.test_result.config(text="Internet connection: Working", foreground="green")
         except requests.RequestException:
             self.test_result.config(text="Internet connection: Failed", foreground="red")
+    
+    def build_mqtt_tab(self):
+        container = ttk.Frame(self.mqtt_tab)
+        container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        conn_frame = ttk.LabelFrame(container, text="MQTT Connection")
+        conn_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(conn_frame, text="Broker:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        self.mqtt_broker_entry = ttk.Entry(conn_frame)
+        self.mqtt_broker_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+        self.mqtt_broker_entry.insert(0, "10.4.32.78")
+        ttk.Label(conn_frame, text="Port:").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+        self.mqtt_port_entry = ttk.Entry(conn_frame, width=6)
+        self.mqtt_port_entry.grid(row=0, column=3, padx=5, pady=5)
+        self.mqtt_port_entry.insert(0, "1883")
+        ttk.Label(conn_frame, text="Topic:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
+        self.mqtt_topic_entry = ttk.Entry(conn_frame)
+        self.mqtt_topic_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
+        self.mqtt_topic_entry.insert(0, "")  # Default empty; user can set it.
+        button_frame = ttk.Frame(conn_frame)
+        button_frame.grid(row=2, column=0, columnspan=4, pady=10)
+        self.mqtt_connect_btn = ttk.Button(button_frame, text="Connect MQTT", command=self.connect_mqtt_py)
+        self.mqtt_connect_btn.pack(side=tk.LEFT, padx=5)
+        self.mqtt_disconnect_btn = ttk.Button(button_frame, text="Disconnect MQTT", command=self.disconnect_mqtt_py)
+        self.mqtt_disconnect_btn.pack(side=tk.LEFT, padx=5)
+        pub_frame = ttk.LabelFrame(container, text="Publish Message")
+        pub_frame.pack(fill=tk.X, pady=5)
+        self.mqtt_message_entry = ttk.Entry(pub_frame)
+        self.mqtt_message_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5, pady=5)
+        self.mqtt_publish_btn = ttk.Button(pub_frame, text="Publish", command=self.publish_mqtt_message)
+        self.mqtt_publish_btn.pack(side=tk.LEFT, padx=5)
+        sub_frame = ttk.LabelFrame(container, text="Received MQTT Messages")
+        sub_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.mqtt_received_text = tk.Text(sub_frame, height=10)
+        self.mqtt_received_text.pack(fill=tk.BOTH, padx=5, pady=5)
+        self.mqtt_received_text.config(state=tk.DISABLED)
+
+    def connect_mqtt_py(self):
+        broker = self.mqtt_broker_entry.get().strip()
+        try:
+            port = int(self.mqtt_port_entry.get().strip())
+        except ValueError:
+            messagebox.showerror("Error", "Invalid MQTT port")
+            return
+        topic = self.mqtt_topic_entry.get().strip()
+        if not broker or not topic:
+            messagebox.showerror("Error", "Please specify both MQTT broker and topic")
+            return
+        try:
+            self.mqtt_client_py.connect(broker, port, 60)
+            self.mqtt_client_py.subscribe(topic)
+            self.log_event(f"Connected to MQTT broker {broker}:{port} on topic '{topic}'")
+            self.mqtt_connect_btn.config(state=tk.DISABLED)
+            self.mqtt_disconnect_btn.config(state=tk.NORMAL)
+        except Exception as e:
+            messagebox.showerror("MQTT Connect Error", str(e))
+
+    def disconnect_mqtt_py(self):
+        try:
+            self.mqtt_client_py.disconnect()
+            self.log_event("Disconnected from MQTT broker.")
+            self.mqtt_connect_btn.config(state=tk.NORMAL)
+            self.mqtt_disconnect_btn.config(state=tk.DISABLED)
+        except Exception as e:
+            messagebox.showerror("MQTT Disconnect Error", str(e))
+
+    def publish_mqtt_message(self):
+        topic = self.mqtt_topic_entry.get().strip()
+        message = self.mqtt_message_entry.get().strip()
+        if topic and message:
+            self.mqtt_client_py.publish(topic, message)
+            self.log_event(f"Published to {topic}: {message}")
+        else:
+            messagebox.showerror("Error", "Enter a message and ensure topic is set")
+
+    def on_mqtt_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            self.log_event("MQTT client connected successfully.")
+        else:
+            self.log_event(f"MQTT client connection failed, rc={rc}")
+
+    def on_mqtt_message(self, client, userdata, msg):
+        received = f"Topic: {msg.topic}, Message: {msg.payload.decode()}\n"
+        self.mqtt_received_text.config(state=tk.NORMAL)
+        self.mqtt_received_text.insert(tk.END, received)
+        self.mqtt_received_text.see(tk.END)
+        self.mqtt_received_text.config(state=tk.DISABLED)
+
+    def mqtt_loop(self):
+        try:
+            self.mqtt_client_py.loop_forever()
+        except Exception as e:
+            self.log_event(f"MQTT loop error: {e}")
+
 
     # -------------------------------------------------------------------------
     # ADMIN TAB
