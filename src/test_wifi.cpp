@@ -1,4 +1,3 @@
-#include <Arduino.h>
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
@@ -6,7 +5,7 @@
 #include <WebServer.h>
 
 // ----- Global Variables & Definitions -----
-Preferences preferences;
+Preferences preferences;  // For permanent storage of credentials (instead of EEPROM)
 const char* apSSID = "SAAA-KKN";
 const char* apPassword = "Ace@6489";
 
@@ -20,254 +19,234 @@ String storedMQTTTopic;
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-WebServer server(80); // For future HTTP serving
+WebServer server(80);  // For potential future HTTP requests
 
 // Sensor simulation structure
 struct SensorData {
-  float AX, AY, AZ;   // Acceleration
-  float VX, VY, VZ;   // Velocity
-  float DX, DY, DZ;   // Distance
-  float HX, HY, HZ;   // Height
-  float TEMP;         // Temperature
+  float AX, AY, AZ;
+  float VX, VY, VZ;
+  float DX, DY, DZ;
+  float HX, HY, HZ;
+  float TEMP;
 };
 
-bool readingActive = false;
+volatile bool readingActive = false;
 unsigned long lastSensorUpdate = 0;
-const unsigned long sensorInterval = 1000;  // 1 second
+const unsigned long sensorInterval = 1000;  // 1 second sensor data interval
 
-// ----- Task function prototypes -----
-void sensorTask(void *pvParameters);
-void serialTask(void *pvParameters);
-void mqttTask(void *pvParameters);
+// Mode flags
+enum Mode {SEND_DATA_MODE, RECEIVE_DATA_MODE};
+Mode currentMode = SEND_DATA_MODE;
 
-// ----- Function Prototypes -----
-void connectToWiFi(const char* ssid, const char* password);
+// Wi-Fi connection flag
+volatile bool isWiFiConnecting = false;
+
+// Function Prototypes
+void handleSerialCommand(String command);
 void sendSensorData();
 void generateRandomData(SensorData &data);
-void handleSerialCommands();
+void connectToWiFi(const char* ssid, const char* password);
 void mqttCallback(char* topic, byte* payload, unsigned int length);
 void reconnectMQTT();
 
-//
+// Wi-Fi Event Handlers
+void connected_to_ap(WiFiEvent_t wifi_event, WiFiEventInfo_t wifi_info) {
+  Serial.println("[+] Connected to the WiFi network");
+}
+
+void disconnected_from_ap(WiFiEvent_t wifi_event, WiFiEventInfo_t wifi_info) {
+  Serial.println("[-] Disconnected from the WiFi AP");
+  WiFi.begin(storedSSID.c_str(), storedPassword.c_str());  // Attempt reconnect if Wi-Fi credentials exist
+}
+
+void got_ip_from_ap(WiFiEvent_t wifi_event, WiFiEventInfo_t wifi_info) {
+  Serial.print("[+] Local ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+}
+
 // Setup
-//
 void setup() {
   Serial.begin(115200);
-  randomSeed(analogRead(0));
+  delay(1000);
 
-  // Initialize Preferences (for WiFi/MQTT credentials)
+  // Initialize Preferences in RW mode
   preferences.begin("wifi-config", false);
   storedSSID = preferences.getString("ssid", "");
   storedPassword = preferences.getString("password", "");
   storedMQTTServer = preferences.getString("mqtt_server", defaultMQTTServer);
   storedMQTTTopic = preferences.getString("mqtt_topic", "");
 
-  // Setup WiFi in AP+STA mode for configuration
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(apSSID, apPassword);
+  // Setup Wi-Fi event handlers
+  WiFi.onEvent(connected_to_ap, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+  WiFi.onEvent(got_ip_from_ap, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  WiFi.onEvent(disconnected_from_ap, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
-  // If WiFi credentials exist, try to connect (non-blocking)
-  if (storedSSID.length() > 0) {
-    Serial.print("Attempting to connect to saved WiFi: ");
-    Serial.println(storedSSID);
-    WiFi.begin(storedSSID.c_str(), storedPassword.c_str());
-  } else {
-    Serial.println("No WiFi credentials stored, running in AP mode.");
-  }
-
+  // Setup MQTT client
   mqttClient.setServer(storedMQTTServer.c_str(), 1883);
   mqttClient.setCallback(mqttCallback);
 
-  Serial.println("System ready");
-  Serial.println("Available Commands:");
-  Serial.println("  START_READING - Begin sensor data transmission");
-  Serial.println("  STOP_READING  - Stop sensor data transmission");
-  Serial.println("  SET_WIFI:ssid,password   - Save WiFi credentials");
-  Serial.println("  CONNECT_WIFI  - Connect to saved WiFi");
-  Serial.println("  DISCONNECT_WIFI - Disconnect WiFi");
-  Serial.println("  SET_MQTT:server,topic    - Save MQTT credentials");
-  Serial.println("  CONNECT_MQTT - Connect to MQTT broker");
-  Serial.println("  DISCONNECT_MQTT - Disconnect from MQTT broker");
-  Serial.println("  GET_STATUS - Get current system status");
-
-  // Initialize the last sensor update time
-  lastSensorUpdate = millis();
-
-  // Create FreeRTOS tasks:
-  // SensorTask: runs on core 1
-  xTaskCreatePinnedToCore(sensorTask, "SensorTask", 4096, NULL, 1, NULL, 1);
-  // SerialTask: runs on core 0 (or default)
-  xTaskCreatePinnedToCore(serialTask, "SerialTask", 4096, NULL, 1, NULL, 0);
-  // MQTTTask: runs on core 0 (or default)
-  xTaskCreatePinnedToCore(mqttTask, "MQTTTask", 4096, NULL, 1, NULL, 0);
+  Serial.println("System Ready. Waiting for commands...");
 }
 
 void loop() {
-  // Leave loop empty – tasks handle everything.
-}
-
-//
-// Task: SensorTask – Sends sensor data every sensorInterval if reading is active.
-//
-void sensorTask(void *pvParameters) {
-  for (;;) {
-    if (readingActive && (millis() - lastSensorUpdate >= sensorInterval)) {
-      sendSensorData();
-      lastSensorUpdate = millis();
-    }
-    // Give other tasks a chance to run
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
-
-//
-// Task: SerialTask – Reads incoming serial commands and processes them.
-//
-void serialTask(void *pvParameters) {
-  for (;;) {
-    handleSerialCommands();
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
-
-//
-// Task: MQTTTask – Ensures MQTT connectivity and processes the MQTT loop.
-//
-void mqttTask(void *pvParameters) {
-  for (;;) {
-    if (!mqttClient.connected()) {
-      reconnectMQTT();
-    }
-    mqttClient.loop();
-    vTaskDelay(100 / portTICK_PERIOD_MS);
-  }
-}
-
-//
-// Non-blocking Serial Command Handler
-//
-void handleSerialCommands() {
+  // Check if a serial command is available
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
-    if (command.length() == 0) return;
+    
+    if (command.length() > 0) {
+      handleSerialCommand(command);
+    }
+  }
 
-    if (command == "START_READING") {
-      readingActive = true;
-      Serial.println("Starting sensor readings");
-    } 
-    else if (command == "STOP_READING") {
-      readingActive = false;
-      Serial.println("Stopping sensor readings");
+  // Check if we need to reconnect MQTT (only when in MQTT mode)
+  if (mqttClient.connected()) {
+    mqttClient.loop();  // Continue processing MQTT loop
+  }
+  delay(100);  // Small delay to prevent overwhelming the loop
+}
+
+// Handle serial commands
+void handleSerialCommand(String command) {
+  if (command == "START_READING") {
+    readingActive = true;
+    Serial.println("ACK:START_READING");
+  }
+  else if (command == "STOP_READING") {
+    readingActive = false;
+    Serial.println("ACK:STOP_READING");
+  }
+  else if (command == "WIFI_CN") {  // Start Wi-Fi connection
+    if (isWiFiConnecting) {
+      Serial.println("Wi-Fi connection already in progress.");
+    } else {
+      isWiFiConnecting = true;
+      Serial.println("Connecting to Wi-Fi...");
+      connectToWiFi(storedSSID.c_str(), storedPassword.c_str());
     }
-    else if (command.startsWith("SET_WIFI:")) {
-      int colonPos = command.indexOf(':');
-      int commaPos = command.indexOf(',');
-      if (colonPos != -1 && commaPos != -1) {
-        String ssid = command.substring(colonPos + 1, commaPos);
-        String password = command.substring(commaPos + 1);
-        preferences.putString("ssid", ssid);
-        preferences.putString("password", password);
-        storedSSID = ssid;
-        storedPassword = password;
-        Serial.println("WiFi credentials saved");
-      } else {
-        Serial.println("Invalid SET_WIFI format. Use: SET_WIFI:ssid,password");
-      }
+  }
+  else if (command == "WIFI_DCN") {  // Disconnect Wi-Fi
+    WiFi.disconnect();
+    Serial.println("Wi-Fi Disconnected");
+    // Ensure the ESP32 does not automatically reconnect
+    WiFi.mode(WIFI_OFF);  // Disable Wi-Fi temporarily to prevent auto-reconnect
+    delay(500);  // Wait for a short time before resetting Wi-Fi mode
+    WiFi.mode(WIFI_STA);  // Set Wi-Fi mode back to STA (station mode) if needed later
+  }
+  else if (command.startsWith("SET_WIFI:")) {
+    int colonPos = command.indexOf(':');
+    int commaPos = command.indexOf(',');
+    if (colonPos != -1 && commaPos != -1) {
+      String ssid = command.substring(colonPos + 1, commaPos);
+      String password = command.substring(commaPos + 1);
+      preferences.putString("ssid", ssid);
+      preferences.putString("password", password);
+      storedSSID = ssid;
+      storedPassword = password;
+      Serial.println("ACK:SET_WIFI");
+    } else {
+      Serial.println("ERR:SET_WIFI format invalid");
     }
-    else if (command == "CONNECT_WIFI") {
-      if (storedSSID.length() > 0) {
-        connectToWiFi(storedSSID.c_str(), storedPassword.c_str());
-      } else {
-        Serial.println("No WiFi credentials saved");
-      }
+  }
+  else if (command == "MQTT_CN") {  // Start MQTT connection
+    if (!mqttClient.connected()) {
+      Serial.println("Connecting to MQTT...");
+      reconnectMQTT();
+    } else {
+      Serial.println("MQTT already connected");
     }
-    else if (command == "DISCONNECT_WIFI") {
-      WiFi.disconnect();
-      Serial.println("WiFi disconnected");
+  }
+  else if (command == "MQTT_DCN") {  // Disconnect MQTT
+    mqttClient.disconnect();
+    Serial.println("MQTT Disconnected");
+  }
+  else if (command.startsWith("SET_MQTT:")) {
+    int colonPos = command.indexOf(':');
+    int commaPos = command.indexOf(',');
+    if (colonPos != -1 && commaPos != -1) {
+      String mqttServer = command.substring(colonPos + 1, commaPos);
+      String mqttTopic = command.substring(commaPos + 1);
+      preferences.putString("mqtt_server", mqttServer);
+      preferences.putString("mqtt_topic", mqttTopic);
+      storedMQTTServer = mqttServer;
+      storedMQTTTopic = mqttTopic;
+      mqttClient.setServer(storedMQTTServer.c_str(), 1883);
+      Serial.println("ACK:SET_MQTT");
+    } else {
+      Serial.println("ERR:SET_MQTT format invalid");
     }
-    else if (command.startsWith("SET_MQTT:")) {
-      int colonPos = command.indexOf(':');
-      int commaPos = command.indexOf(',');
-      if (colonPos != -1 && commaPos != -1) {
-        String mqttServer = command.substring(colonPos + 1, commaPos);
-        String mqttTopic = command.substring(commaPos + 1);
-        preferences.putString("mqtt_server", mqttServer);
-        preferences.putString("mqtt_topic", mqttTopic);
-        storedMQTTServer = mqttServer;
-        storedMQTTTopic = mqttTopic;
-        mqttClient.setServer(storedMQTTServer.c_str(), 1883);
-        Serial.println("MQTT credentials saved");
-      } else {
-        Serial.println("Invalid SET_MQTT format. Use: SET_MQTT:server,topic");
-      }
+  }
+  else if (command == "GET_STATUS") {
+    // Get the status of Wi-Fi and MQTT
+    Serial.print("STATUS:WiFi:");
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print("CONNECTED:");
+      Serial.print(WiFi.SSID());
+      Serial.print(":");
+      Serial.println(WiFi.localIP());
+    } else {
+      Serial.println("DISCONNECTED");
     }
-    else if (command == "CONNECT_MQTT") {
-      if (!mqttClient.connected()) {
-        reconnectMQTT();
-      } else {
-        Serial.println("MQTT already connected");
-      }
+
+    Serial.print("STATUS:MQTT:");
+    if (mqttClient.connected()) {
+      Serial.println("CONNECTED");
+    } else {
+      Serial.println("DISCONNECTED");
     }
-    else if (command == "DISCONNECT_MQTT") {
-      mqttClient.disconnect();
-      Serial.println("MQTT disconnected");
-    }
-    else if (command == "GET_STATUS") {
-      Serial.print("WiFi Status: ");
-      if (WiFi.status() == WL_CONNECTED) {
-        Serial.print("Connected to ");
-        Serial.print(WiFi.SSID());
-        Serial.print(", IP: ");
-        Serial.println(WiFi.localIP());
-      } else {
-        Serial.println("Disconnected");
-      }
-      Serial.print("Sensor Reading: ");
-      Serial.println(readingActive ? "Active" : "Inactive");
-      Serial.print("MQTT: ");
-      Serial.println(mqttClient.connected() ? "Connected" : "Disconnected");
-    }
-    else {
-      Serial.println("Unknown command");
+  }
+  else {
+    Serial.println("ERR:Unknown command");
+  }
+}
+
+
+// Wi-Fi Functions
+void connectToWiFi(const char* ssid, const char* password) {
+  WiFi.begin(ssid, password);
+  unsigned long startMillis = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - startMillis) < 10000) {  // 10 seconds timeout
+    delay(500);
+    Serial.print(".");
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Wi-Fi connected");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    isWiFiConnecting = false;  // Reset flag after successful connection
+  } else {
+    Serial.println("Failed to connect to Wi-Fi");
+    isWiFiConnecting = false;  // Reset flag on failure
+  }
+}
+
+// MQTT Functions
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    if (mqttClient.connect("ESP32Client")) {
+      Serial.println("connected");
+      mqttClient.publish("status", "ESP32 connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      delay(5000);
     }
   }
 }
 
-// ----- WiFi Functions -----
-void connectToWiFi(const char* ssid, const char* password) {
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  // Do not block here; let the main tasks and status checks handle connection
-}
-
-// ----- MQTT Functions -----
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("MQTT Message on [");
+  Serial.print("MQTT Message received on [");
   Serial.print(topic);
   Serial.print("]: ");
   for (unsigned int i = 0; i < length; i++) {
-      Serial.print((char)payload[i]);
+    Serial.print((char)payload[i]);
   }
   Serial.println();
 }
 
-void reconnectMQTT() {
-  if (!mqttClient.connected()) {
-    Serial.print("Attempting MQTT connection...");
-    if (mqttClient.connect("ESP32Client")) {
-      Serial.println(" MQTT connected");
-      mqttClient.publish("status", "ESP32 connected");
-    } else {
-      Serial.print(" MQTT connect failed, rc=");
-      Serial.println(mqttClient.state());
-      delay(500); // Short delay before next attempt
-    }
-  }
-}
-
-// ----- Sensor Data Functions -----
+// Sensor Data Functions
 void sendSensorData() {
   SensorData data;
   generateRandomData(data);
@@ -292,9 +271,8 @@ void sendSensorData() {
   Serial.println(output);
   Serial.flush();
 
-  // Publish sensor data via MQTT if connected and topic is set
   if (mqttClient.connected() && storedMQTTTopic.length() > 0) {
-      mqttClient.publish(storedMQTTTopic.c_str(), output.c_str());
+    mqttClient.publish(storedMQTTTopic.c_str(), output.c_str());
   }
 }
 
@@ -302,18 +280,14 @@ void generateRandomData(SensorData &data) {
   data.AX = random(90, 110) / 10.0;
   data.AY = random(90, 110) / 10.0;
   data.AZ = random(90, 110) / 10.0;
-
   data.VX = random(1, 50) / 10.0;
   data.VY = random(1, 50) / 10.0;
   data.VZ = random(1, 50) / 10.0;
-
   data.DX = random(100, 1000) / 10.0;
   data.DY = random(100, 1000) / 10.0;
   data.DZ = random(100, 1000) / 10.0;
-
   data.HX = random(500, 1500) / 10.0;
   data.HY = random(500, 1500) / 10.0;
   data.HZ = random(500, 1500) / 10.0;
-
   data.TEMP = random(200, 350) / 10.0;
 }
